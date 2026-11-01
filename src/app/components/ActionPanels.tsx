@@ -5,7 +5,6 @@ import { bookSurgery, triggerEmergency } from '../actions';
 import { useRef, useState, useTransition } from 'react';
 import type { StaffMember, OperatingTheater } from '../lib/types';
 
-// Let's explicitly define our Surgical Asset here so TypeScript is happy
 export type SurgicalAsset = {
   asset_id: number;
   asset_name: string;
@@ -100,7 +99,7 @@ function AssetRowInput({
   row,
   index,
   canRemove,
-  assetList, // We added the asset list here
+  assetList,
   onUpdate,
   onRemove,
 }: {
@@ -140,11 +139,10 @@ function AssetRowInput({
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
-// Note: We added `assetList` to the props here. 
 export default function ActionPanels({
   staffList,
   branchOts,
-  assetList = [] // Default empty array just in case 
+  assetList = []
 }: {
   staffList: StaffMember[];
   branchOts: OperatingTheater[];
@@ -158,10 +156,32 @@ export default function ActionPanels({
   const availableRoles = Array.from(new Set(staffList.map((s) => s.medical_role))).sort();
   const defaultRole = availableRoles.length > 0 ? availableRoles[0] : '';
 
-  const [staffRows, setStaffRows] = useState<StaffRow[]>([
+  // ── SEPARATED STATE FOR STANDARD BOOKING ──
+  const [bookingStaffRows, setBookingStaffRows] = useState<StaffRow[]>([
     { id: uid(), staffCode: '', role: defaultRole },
   ]);
-  const [assetRows, setAssetRows] = useState<AssetRow[]>([{ id: uid(), assetId: '' }]);
+  const [bookingAssetRows, setBookingAssetRows] = useState<AssetRow[]>([
+    { id: uid(), assetId: '' }
+  ]);
+
+  // ── SEPARATED STATE FOR EMERGENCY OVERRIDE ──
+  const [emergencyStaffRows, setEmergencyStaffRows] = useState<StaffRow[]>([
+    { id: uid(), staffCode: '', role: defaultRole },
+  ]);
+  const [emergencyAssetRows, setEmergencyAssetRows] = useState<AssetRow[]>([
+    { id: uid(), assetId: '' }
+  ]);
+
+  // ── STANDARD BOOKING HANDLERS ──
+  const addBookingStaff = () => setBookingStaffRows((r) => [...r, { id: uid(), staffCode: '', role: defaultRole }]);
+  const removeBookingStaff = (id: string) => setBookingStaffRows((r) => r.filter((row) => row.id !== id));
+  const updateBookingStaff = (id: string, field: keyof Omit<StaffRow, 'id'>, value: string) =>
+    setBookingStaffRows((r) => r.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
+
+  const addBookingAsset = () => setBookingAssetRows((r) => [...r, { id: uid(), assetId: '' }]);
+  const removeBookingAsset = (id: string) => setBookingAssetRows((r) => r.filter((row) => row.id !== id));
+  const updateBookingAsset = (id: string, value: string) =>
+    setBookingAssetRows((r) => r.map((row) => (row.id === id ? { ...row, assetId: value } : row)));
 
   function handleBooking(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -174,11 +194,22 @@ export default function ActionPanels({
       } else {
         toast.success(`Surgery booked — ID #${result.bookingId}`, { id: 'booking' });
         bookingFormRef.current?.reset();
-        setStaffRows([{ id: uid(), staffCode: '', role: defaultRole }]);
-        setAssetRows([{ id: uid(), assetId: '' }]);
+        setBookingStaffRows([{ id: uid(), staffCode: '', role: defaultRole }]);
+        setBookingAssetRows([{ id: uid(), assetId: '' }]);
       }
     });
   }
+
+  // ── EMERGENCY OVERRIDE HANDLERS ──
+  const addEmergencyStaff = () => setEmergencyStaffRows((r) => [...r, { id: uid(), staffCode: '', role: defaultRole }]);
+  const removeEmergencyStaff = (id: string) => setEmergencyStaffRows((r) => r.filter((row) => row.id !== id));
+  const updateEmergencyStaff = (id: string, field: keyof Omit<StaffRow, 'id'>, value: string) =>
+    setEmergencyStaffRows((r) => r.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
+
+  const addEmergencyAsset = () => setEmergencyAssetRows((r) => [...r, { id: uid(), assetId: '' }]);
+  const removeEmergencyAsset = (id: string) => setEmergencyAssetRows((r) => r.filter((row) => row.id !== id));
+  const updateEmergencyAsset = (id: string, value: string) =>
+    setEmergencyAssetRows((r) => r.map((row) => (row.id === id ? { ...row, assetId: value } : row)));
 
   function handleEmergency(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -191,19 +222,11 @@ export default function ActionPanels({
       } else {
         toast.success(`Emergency override active — Booking #${result.bookingId}`, { id: 'emergency' });
         emergencyFormRef.current?.reset();
+        setEmergencyStaffRows([{ id: uid(), staffCode: '', role: defaultRole }]);
+        setEmergencyAssetRows([{ id: uid(), assetId: '' }]);
       }
     });
   }
-
-  const addStaffRow = () => setStaffRows((r) => [...r, { id: uid(), staffCode: '', role: defaultRole }]);
-  const removeStaffRow = (id: string) => setStaffRows((r) => r.filter((row) => row.id !== id));
-  const updateStaff = (id: string, field: keyof Omit<StaffRow, 'id'>, value: string) =>
-    setStaffRows((r) => r.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
-
-  const addAssetRow = () => setAssetRows((r) => [...r, { id: uid(), assetId: '' }]);
-  const removeAssetRow = (id: string) => setAssetRows((r) => r.filter((row) => row.id !== id));
-  const updateAsset = (id: string, value: string) =>
-    setAssetRows((r) => r.map((row) => (row.id === id ? { ...row, assetId: value } : row)));
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
@@ -243,18 +266,18 @@ export default function ActionPanels({
           <div className="bg-stone-50/70 border border-stone-100 rounded-2xl p-4 space-y-3">
             <div className="flex items-center justify-between mb-1">
               <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Assign Team Members</p>
-              <button type="button" onClick={addStaffRow} className={addBtnCls}>Add Staff</button>
+              <button type="button" onClick={addBookingStaff} className={addBtnCls}>Add Staff</button>
             </div>
-            {staffRows.map((row, idx) => (
+            {bookingStaffRows.map((row, idx) => (
               <StaffRowInput
                 key={row.id}
                 row={row}
                 index={idx}
-                canRemove={staffRows.length > 1}
+                canRemove={bookingStaffRows.length > 1}
                 staffList={staffList}
                 availableRoles={availableRoles}
-                onUpdate={updateStaff}
-                onRemove={removeStaffRow}
+                onUpdate={updateBookingStaff}
+                onRemove={removeBookingStaff}
               />
             ))}
           </div>
@@ -263,17 +286,17 @@ export default function ActionPanels({
           <div className="bg-stone-50/70 border border-stone-100 rounded-2xl p-4 space-y-3">
             <div className="flex items-center justify-between mb-1">
               <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Allocate Surgical Assets</p>
-              <button type="button" onClick={addAssetRow} className={addBtnCls}>Add Asset</button>
+              <button type="button" onClick={addBookingAsset} className={addBtnCls}>Add Asset</button>
             </div>
-            {assetRows.map((row, idx) => (
+            {bookingAssetRows.map((row, idx) => (
               <AssetRowInput
                 key={row.id}
                 row={row}
                 index={idx}
-                canRemove={assetRows.length > 1}
-                assetList={assetList} // Pass the asset list down!
-                onUpdate={updateAsset}
-                onRemove={removeAssetRow}
+                canRemove={bookingAssetRows.length > 1}
+                assetList={assetList}
+                onUpdate={updateBookingAsset}
+                onRemove={removeBookingAsset}
               />
             ))}
           </div>
@@ -327,31 +350,39 @@ export default function ActionPanels({
 
           <SectionDivider label="Emergency Responder Assignment" />
           <div className="bg-rose-50/50 border border-rose-100 rounded-2xl p-4 space-y-3">
-            {staffRows.map((row, idx) => (
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">Assign Team Members</p>
+              <button type="button" onClick={addEmergencyStaff} className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-700 hover:text-rose-900 border border-rose-200 hover:border-rose-400 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-all">Add Staff</button>
+            </div>
+            {emergencyStaffRows.map((row, idx) => (
               <StaffRowInput
                 key={row.id}
                 row={row}
                 index={idx}
-                canRemove={false}
+                canRemove={emergencyStaffRows.length > 1}
                 staffList={staffList}
                 availableRoles={availableRoles}
-                onUpdate={updateStaff}
-                onRemove={removeStaffRow}
+                onUpdate={updateEmergencyStaff}
+                onRemove={removeEmergencyStaff}
               />
             ))}
           </div>
 
           <SectionDivider label="Emergency Equipment Allocation" />
           <div className="bg-rose-50/50 border border-rose-100 rounded-2xl p-4 space-y-3">
-            {assetRows.map((row, idx) => (
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-[10px] font-bold text-rose-400 uppercase tracking-widest">Allocate Surgical Assets</p>
+              <button type="button" onClick={addEmergencyAsset} className="inline-flex items-center gap-1.5 text-xs font-bold text-rose-700 hover:text-rose-900 border border-rose-200 hover:border-rose-400 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg transition-all">Add Asset</button>
+            </div>
+            {emergencyAssetRows.map((row, idx) => (
               <AssetRowInput
                 key={row.id}
                 row={row}
                 index={idx}
-                canRemove={false}
-                assetList={assetList} // Pass the asset list down!
-                onUpdate={updateAsset}
-                onRemove={removeAssetRow}
+                canRemove={emergencyAssetRows.length > 1}
+                assetList={assetList}
+                onUpdate={updateEmergencyAsset}
+                onRemove={removeEmergencyAsset}
               />
             ))}
           </div>
