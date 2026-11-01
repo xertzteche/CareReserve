@@ -5,6 +5,14 @@ import { bookSurgery, triggerEmergency } from '../actions';
 import { useRef, useState, useTransition } from 'react';
 import type { StaffMember, OperatingTheater } from '../lib/types';
 
+// Let's explicitly define our Surgical Asset here so TypeScript is happy
+export type SurgicalAsset = {
+  asset_id: number;
+  asset_name: string;
+  asset_code: string;
+  sterilization_status: string;
+};
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 type StaffRow = { id: string; staffCode: string; role: string };
 type AssetRow = { id: string; assetId: string };
@@ -92,26 +100,38 @@ function AssetRowInput({
   row,
   index,
   canRemove,
+  assetList, // We added the asset list here
   onUpdate,
   onRemove,
 }: {
   row: AssetRow;
   index: number;
   canRemove: boolean;
+  assetList: SurgicalAsset[];
   onUpdate: (id: string, value: string) => void;
   onRemove: (id: string) => void;
 }) {
   return (
     <div className="flex gap-2 items-center">
-      <input
-        type="number"
+      <select
         name="assetId"
-        placeholder={`Asset ID ${index + 1}`}
         value={row.assetId}
         onChange={(e) => onUpdate(row.id, e.target.value)}
-        className="flex-1 bg-stone-100 border border-transparent rounded-xl px-4 py-3 text-sm font-medium text-stone-800 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-teal-500/40 focus:border-teal-300 transition-all tabular-nums"
-        min={1}
-      />
+        className="flex-1 bg-stone-100 border border-transparent rounded-xl px-4 py-3 text-sm font-medium text-stone-800 focus:outline-none focus:ring-2 focus:ring-teal-500/40 focus:border-teal-300 transition-all cursor-pointer"
+        required
+      >
+        <option value="" disabled>Select Equipment...</option>
+        {assetList.map((asset) => (
+          <option
+            key={asset.asset_id}
+            value={asset.asset_id}
+            disabled={asset.sterilization_status !== 'Ready'}
+          >
+            {asset.asset_code} — {asset.asset_name} {asset.sterilization_status !== 'Ready' ? `(${asset.sterilization_status})` : ''}
+          </option>
+        ))}
+      </select>
+
       {canRemove && (
         <button type="button" onClick={() => onRemove(row.id)} className={removeBtnCls}>×</button>
       )}
@@ -120,13 +140,21 @@ function AssetRowInput({
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────────
-export default function ActionPanels({ staffList, branchOts }: { staffList: StaffMember[]; branchOts: OperatingTheater[]; }) {
+// Note: We added `assetList` to the props here. 
+export default function ActionPanels({
+  staffList,
+  branchOts,
+  assetList = [] // Default empty array just in case 
+}: {
+  staffList: StaffMember[];
+  branchOts: OperatingTheater[];
+  assetList?: SurgicalAsset[];
+}) {
   const bookingFormRef = useRef<HTMLFormElement>(null);
   const emergencyFormRef = useRef<HTMLFormElement>(null);
   const [isBookingPending, startBookingTransition] = useTransition();
   const [isEmergencyPending, startEmergencyTransition] = useTransition();
 
-  // Dynamically calculate available roles from the database payload
   const availableRoles = Array.from(new Set(staffList.map((s) => s.medical_role))).sort();
   const defaultRole = availableRoles.length > 0 ? availableRoles[0] : '';
 
@@ -243,6 +271,7 @@ export default function ActionPanels({ staffList, branchOts }: { staffList: Staf
                 row={row}
                 index={idx}
                 canRemove={assetRows.length > 1}
+                assetList={assetList} // Pass the asset list down!
                 onUpdate={updateAsset}
                 onRemove={removeAssetRow}
               />
@@ -308,6 +337,21 @@ export default function ActionPanels({ staffList, branchOts }: { staffList: Staf
                 availableRoles={availableRoles}
                 onUpdate={updateStaff}
                 onRemove={removeStaffRow}
+              />
+            ))}
+          </div>
+
+          <SectionDivider label="Emergency Equipment Allocation" />
+          <div className="bg-rose-50/50 border border-rose-100 rounded-2xl p-4 space-y-3">
+            {assetRows.map((row, idx) => (
+              <AssetRowInput
+                key={row.id}
+                row={row}
+                index={idx}
+                canRemove={false}
+                assetList={assetList} // Pass the asset list down!
+                onUpdate={updateAsset}
+                onRemove={removeAssetRow}
               />
             ))}
           </div>

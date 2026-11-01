@@ -53,7 +53,6 @@ export async function logoutAction() {
 async function verifyStaffAvailability(staffCodes: string[], scheduledStart: string) {
   if (staffCodes.length === 0) return { success: true, codeToId: new Map<string, number>() };
 
-  // 1. Resolve codes to IDs
   const { data: staffMembers, error: staffLookupError } = await supabase
     .from('staff')
     .select('staff_id, staff_code')
@@ -66,14 +65,12 @@ async function verifyStaffAvailability(staffCodes: string[], scheduledStart: str
   const codeToId = new Map(staffMembers.map((s) => [s.staff_code, s.staff_id]));
   const requestedStaffIds = staffMembers.map((s) => s.staff_id);
 
-  // 2. Find any active bookings happening at this exact time
   const { data: conflictingBookings } = await supabase
     .from('surgery_booking')
     .select('booking_id')
     .in('booking_status', ['Scheduled', 'Emergency'])
     .eq('scheduled_start', new Date(scheduledStart).toISOString());
 
-  // 3. If there are bookings at this time, check if our requested staff are assigned to them
   if (conflictingBookings && conflictingBookings.length > 0) {
     const conflictBookingIds = conflictingBookings.map(b => b.booking_id);
     const { data: staffConflicts } = await supabase
@@ -90,6 +87,52 @@ async function verifyStaffAvailability(staffCodes: string[], scheduledStart: str
   return { success: true, codeToId };
 }
 
+// ─── Guard Helper: Prevent Asset Overbooking ──────────────────────────────────
+async function verifyAssetAvailability(assetIds: number[], scheduledStart: string) {
+  if (assetIds.length === 0) return { success: true };
+
+  const { data: assets, error: assetLookupError } = await supabase
+    .from('surgical_asset')
+    .select('asset_id, asset_name, total_quantity, sterilization_status')
+    .in('asset_id', assetIds);
+
+  if (assetLookupError || !assets?.length) {
+    return { success: false, error: 'Asset lookup failed: Invalid assets requested.' };
+  }
+
+  const unavailableAsset = assets.find(a => a.sterilization_status !== 'Ready');
+  if (unavailableAsset) {
+    return { success: false, error: `Asset Conflict: ${unavailableAsset.asset_name} is currently marked as '${unavailableAsset.sterilization_status}' and cannot be booked.` };
+  }
+
+  const { data: conflictingBookings } = await supabase
+    .from('surgery_booking')
+    .select('booking_id')
+    .in('booking_status', ['Scheduled', 'Emergency'])
+    .eq('scheduled_start', new Date(scheduledStart).toISOString());
+
+  if (conflictingBookings && conflictingBookings.length > 0) {
+    const conflictBookingIds = conflictingBookings.map(b => b.booking_id);
+
+    const { data: activeAllocations } = await supabase
+      .from('booking_asset_allocation')
+      .select('asset_id')
+      .in('booking_id', conflictBookingIds)
+      .in('asset_id', assetIds);
+
+    if (activeAllocations) {
+      for (const reqAsset of assets) {
+        const currentlyInUseCount = activeAllocations.filter(a => a.asset_id === reqAsset.asset_id).length;
+        if (currentlyInUseCount >= reqAsset.total_quantity) {
+          return { success: false, error: `Inventory Depleted: All ${reqAsset.total_quantity} units of ${reqAsset.asset_name} are already booked for surgeries at this exact time.` };
+        }
+      }
+    }
+  }
+
+  return { success: true };
+}
+
 // ─── Action 1: Book Surgery ────────────────────────────────────────────────────
 export async function bookSurgery(formData: FormData) {
   const branchId = await getSessionBranchId();
@@ -101,7 +144,6 @@ export async function bookSurgery(formData: FormData) {
 
   if (!patientId || !otId || !scheduledStart) return { success: false, error: 'Patient ID, OT ID, and Scheduled Start are required.' };
 
-  // Guard 1: Branch Isolation
   const { data: otCheck } = await supabase
     .from('operating_theater')
     .select('ot_id')
@@ -121,7 +163,10 @@ export async function bookSurgery(formData: FormData) {
   const staffCheck = await verifyStaffAvailability(staffCodes, scheduledStart);
   if (!staffCheck.success) return { success: false, error: staffCheck.error };
 
-  // Step 1: Insert the primary booking
+  // Guard 3: Asset Inventory & Concurrency Check
+  const assetCheck = await verifyAssetAvailability(assetIds, scheduledStart);
+  if (!assetCheck.success) return { success: false, error: assetCheck.error };
+
   const { data: booking, error: bookingError } = await supabase
     .from('surgery_booking')
     .insert({
@@ -142,7 +187,6 @@ export async function bookSurgery(formData: FormData) {
 
   const bookingId = booking.booking_id;
 
-  // Step 2: Insert staff assignments
   if (staffCodes.length > 0 && staffCheck.codeToId) {
     const staffRows = staffCodes
       .map((code, i) => ({
@@ -155,7 +199,6 @@ export async function bookSurgery(formData: FormData) {
     await supabase.from('booking_staff_assignment').insert(staffRows);
   }
 
-  // Step 3: Insert asset allocations
   if (assetIds.length > 0) {
     const allocationStart = new Date(scheduledStart).toISOString();
     const assetRows = assetIds.map((assetId) => ({
@@ -184,7 +227,6 @@ export async function triggerEmergency(formData: FormData) {
     return { success: false, error: 'All emergency fields are required.' };
   }
 
-  // Guard 1: Branch Isolation
   const { data: otCheck } = await supabase
     .from('operating_theater')
     .select('ot_id')
@@ -204,7 +246,10 @@ export async function triggerEmergency(formData: FormData) {
   const staffCheck = await verifyStaffAvailability(staffCodes, scheduledStart);
   if (!staffCheck.success) return { success: false, error: staffCheck.error };
 
-  // Step 1: Bump the conflicting booking
+  // Guard 3: Asset Inventory & Concurrency Check
+  const assetCheck = await verifyAssetAvailability(assetIds, scheduledStart);
+  if (!assetCheck.success) return { success: false, error: assetCheck.error };
+
   const { error: rescheduleError } = await supabase
     .from('surgery_booking')
     .update({ booking_status: 'Rescheduled (Emergency)' })
@@ -212,7 +257,6 @@ export async function triggerEmergency(formData: FormData) {
 
   if (rescheduleError) return { success: false, error: `Could not reschedule conflict booking #${conflictBookingId}: ${rescheduleError.message}` };
 
-  // Step 2: Insert the emergency booking
   const { data: emergencyBooking, error: bookingError } = await supabase
     .from('surgery_booking')
     .insert({
@@ -228,7 +272,6 @@ export async function triggerEmergency(formData: FormData) {
 
   const emergencyBookingId = emergencyBooking.booking_id;
 
-  // Step 3: Insert staff assignments
   if (staffCodes.length > 0 && staffCheck.codeToId) {
     const staffRows = staffCodes
       .map((code, i) => ({
@@ -241,7 +284,6 @@ export async function triggerEmergency(formData: FormData) {
     await supabase.from('booking_staff_assignment').insert(staffRows);
   }
 
-  // Step 4: Insert asset allocations
   if (assetIds.length > 0) {
     const allocationStart = new Date(scheduledStart).toISOString();
     const assetRows = assetIds.map((assetId) => ({

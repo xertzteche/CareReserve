@@ -13,26 +13,26 @@ type StaffAssignment = { staff_id: number; assigned_role: string };
 type AssetAllocation = { asset_id: number; allocation_start: string };
 
 type Booking = {
-  booking_id:               number;
-  ot_id:                    number;
-  patient_id:               number;
-  scheduled_start:          string;
-  booking_status:           string;
+  booking_id: number;
+  ot_id: number;
+  patient_id: number;
+  scheduled_start: string;
+  booking_status: string;
   booking_staff_assignment: StaffAssignment[];
   booking_asset_allocation: AssetAllocation[];
 };
 
 // ── Role abbreviation map ──────────────────────────────────────────────────────
 const ROLE_ABBR: Record<string, string> = {
-  'Lead Surgeon':          'Lead Surg.',
-  'Anesthesiologist':      'Anesth.',
-  'Scrub Nurse':           'Scrub Nurse',
+  'Lead Surgeon': 'Lead Surg.',
+  'Anesthesiologist': 'Anesth.',
+  'Scrub Nurse': 'Scrub Nurse',
   'Surgical Technologist': 'Surg. Tech.',
-  'Perfusionist':          'Perfusionist',
-  'Assistant Surgeon':     'Asst. Surg.',
-  'Emergency Responder':   'Emerg.',
-  'Surgeon':               'Surgeon',
-  'Unspecified':           'Unspecified',
+  'Perfusionist': 'Perfusionist',
+  'Assistant Surgeon': 'Asst. Surg.',
+  'Emergency Responder': 'Emerg.',
+  'Surgeon': 'Surgeon',
+  'Unspecified': 'Unspecified',
 };
 
 function roleAbbr(role: string): string {
@@ -59,8 +59,6 @@ export default async function Dashboard() {
   const cookieStore = await cookies();
   const branchId = Number(cookieStore.get('branch_id')?.value ?? 0);
 
-  // Guard: should not reach here without a valid cookie (layout already guards),
-  // but this ensures the page itself is also safe.
   if (!branchId) redirect('/');
 
   // ── Fetch branch info ──────────────────────────────────────────────────────
@@ -91,8 +89,8 @@ export default async function Dashboard() {
   const { data: reservedOts, error: otError } =
     otIds.length > 0
       ? await supabase
-          .from('surgery_booking')
-          .select(`
+        .from('surgery_booking')
+        .select(`
             booking_id,
             ot_id,
             patient_id,
@@ -101,10 +99,10 @@ export default async function Dashboard() {
             booking_staff_assignment ( staff_id, assigned_role ),
             booking_asset_allocation ( asset_id, allocation_start )
           `)
-          .in('booking_status', ['Scheduled', 'Emergency'])
-          .in('ot_id', otIds)
-          .gte('scheduled_start', now)
-          .order('scheduled_start', { ascending: true })
+        .in('booking_status', ['Scheduled', 'Emergency'])
+        .in('ot_id', otIds)
+        .gte('scheduled_start', now)
+        .order('scheduled_start', { ascending: true })
       : { data: [], error: null };
 
   // ── Fetch staff with staff_code for the role-filtered dropdowns ───────────
@@ -112,6 +110,13 @@ export default async function Dashboard() {
     .from('staff')
     .select('staff_id, staff_code, first_name, last_name, medical_role')
     .order('staff_code', { ascending: true });
+
+  // ── Fetch assets for THIS branch for the equipment dropdown ───────────────
+  const { data: assetList } = await supabase
+    .from('surgical_asset')
+    .select('asset_id, asset_code, asset_name, sterilization_status, total_quantity')
+    .eq('current_branch_id', branchId) // Branch Isolation!
+    .order('asset_name', { ascending: true });
 
   return (
     <main className="min-h-screen p-4 md:p-6 max-w-[1400px] mx-auto bg-stone-200/50 font-sans text-stone-800">
@@ -164,9 +169,8 @@ export default async function Dashboard() {
                   {branches?.map((b) => (
                     <tr
                       key={b.branch_id}
-                      className={`hover:bg-stone-50/50 transition-colors ${
-                        b.branch_id === branchId ? 'bg-teal-50/40' : ''
-                      }`}
+                      className={`hover:bg-stone-50/50 transition-colors ${b.branch_id === branchId ? 'bg-teal-50/40' : ''
+                        }`}
                     >
                       <td className="px-6 py-5 font-bold text-teal-700">
                         #{b.branch_id}
@@ -235,11 +239,10 @@ export default async function Dashboard() {
                       </span>
                     </div>
                     <span
-                      className={`text-[10px] uppercase font-black tracking-wide px-2 py-0.5 rounded-md ${
-                        ot.booking_status === 'Emergency'
+                      className={`text-[10px] uppercase font-black tracking-wide px-2 py-0.5 rounded-md ${ot.booking_status === 'Emergency'
                           ? 'bg-rose-100 text-rose-700'
                           : 'bg-amber-100 text-amber-700'
-                      }`}
+                        }`}
                     >
                       {ot.booking_status}
                     </span>
@@ -295,11 +298,11 @@ export default async function Dashboard() {
                   )}
 
                   {ot.booking_staff_assignment?.length === 0 &&
-                   ot.booking_asset_allocation?.length === 0 && (
-                    <p className="text-[10px] text-stone-400 italic mt-1">
-                      No staff or assets assigned.
-                    </p>
-                  )}
+                    ot.booking_asset_allocation?.length === 0 && (
+                      <p className="text-[10px] text-stone-400 italic mt-1">
+                        No staff or assets assigned.
+                      </p>
+                    )}
                 </article>
               ))
             )}
@@ -308,12 +311,12 @@ export default async function Dashboard() {
 
       </div>
 
-      {/* ── Action Panels ── */}
+      {/* ── Action Panels (Updated to receive assetList!) ── */}
       <ActionPanels
         staffList={(staffList ?? []) as StaffMember[]}
         branchOts={(branchOts ?? []) as OperatingTheater[]}
+        assetList={(assetList ?? []) as any[]}
       />
     </main>
   );
 }
-
