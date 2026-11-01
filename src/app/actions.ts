@@ -50,7 +50,7 @@ export async function logoutAction() {
 }
 
 // ─── Guard Helper: Prevent Staff Double-Booking ────────────────────────────────
-async function verifyStaffAvailability(staffCodes: string[], scheduledStart: string) {
+async function verifyStaffAvailability(staffCodes: string[], scheduledStart: string, ignoreBookingId?: number) {
   if (staffCodes.length === 0) return { success: true, codeToId: new Map<string, number>() };
 
   const { data: staffMembers, error: staffLookupError } = await supabase
@@ -65,11 +65,19 @@ async function verifyStaffAvailability(staffCodes: string[], scheduledStart: str
   const codeToId = new Map(staffMembers.map((s) => [s.staff_code, s.staff_id]));
   const requestedStaffIds = staffMembers.map((s) => s.staff_id);
 
-  const { data: conflictingBookings } = await supabase
+  // Build the query to find active bookings at this time
+  let query = supabase
     .from('surgery_booking')
     .select('booking_id')
     .in('booking_status', ['Scheduled', 'Emergency'])
     .eq('scheduled_start', new Date(scheduledStart).toISOString());
+
+  // CRITICAL FIX: If this is an emergency override, ignore the booking we are bumping!
+  if (ignoreBookingId) {
+    query = query.neq('booking_id', ignoreBookingId);
+  }
+
+  const { data: conflictingBookings } = await query;
 
   if (conflictingBookings && conflictingBookings.length > 0) {
     const conflictBookingIds = conflictingBookings.map(b => b.booking_id);
@@ -80,7 +88,7 @@ async function verifyStaffAvailability(staffCodes: string[], scheduledStart: str
       .in('staff_id', requestedStaffIds);
 
     if (staffConflicts && staffConflicts.length > 0) {
-      return { success: false, error: 'Scheduling Conflict: One or more selected staff members are already assigned to an active surgery at this exact time.' };
+      return { success: false, error: 'Scheduling Conflict: One or more selected staff members are already assigned to another active surgery at this exact time.' };
     }
   }
 
@@ -88,7 +96,7 @@ async function verifyStaffAvailability(staffCodes: string[], scheduledStart: str
 }
 
 // ─── Guard Helper: Prevent Asset Overbooking ──────────────────────────────────
-async function verifyAssetAvailability(assetIds: number[], scheduledStart: string) {
+async function verifyAssetAvailability(assetIds: number[], scheduledStart: string, ignoreBookingId?: number) {
   if (assetIds.length === 0) return { success: true };
 
   const { data: assets, error: assetLookupError } = await supabase
@@ -105,11 +113,19 @@ async function verifyAssetAvailability(assetIds: number[], scheduledStart: strin
     return { success: false, error: `Asset Conflict: ${unavailableAsset.asset_name} is currently marked as '${unavailableAsset.sterilization_status}' and cannot be booked.` };
   }
 
-  const { data: conflictingBookings } = await supabase
+  // Build the query to find active bookings at this time
+  let query = supabase
     .from('surgery_booking')
     .select('booking_id')
     .in('booking_status', ['Scheduled', 'Emergency'])
     .eq('scheduled_start', new Date(scheduledStart).toISOString());
+
+  // CRITICAL FIX: If this is an emergency override, ignore the booking we are bumping!
+  if (ignoreBookingId) {
+    query = query.neq('booking_id', ignoreBookingId);
+  }
+
+  const { data: conflictingBookings } = await query;
 
   if (conflictingBookings && conflictingBookings.length > 0) {
     const conflictBookingIds = conflictingBookings.map(b => b.booking_id);
@@ -124,7 +140,7 @@ async function verifyAssetAvailability(assetIds: number[], scheduledStart: strin
       for (const reqAsset of assets) {
         const currentlyInUseCount = activeAllocations.filter(a => a.asset_id === reqAsset.asset_id).length;
         if (currentlyInUseCount >= reqAsset.total_quantity) {
-          return { success: false, error: `Inventory Depleted: All ${reqAsset.total_quantity} units of ${reqAsset.asset_name} are already booked for surgeries at this exact time.` };
+          return { success: false, error: `Inventory Depleted: All ${reqAsset.total_quantity} units of ${reqAsset.asset_name} are already booked for other surgeries at this exact time.` };
         }
       }
     }
@@ -159,11 +175,10 @@ export async function bookSurgery(formData: FormData) {
   const rawAssetIds = getAll(formData, 'assetId');
   const assetIds = rawAssetIds.map(Number).filter((n) => !isNaN(n) && n > 0);
 
-  // Guard 2: Staff Concurrency Check
+  // Standard Booking: NO ignoreBookingId passed. Must strictly check all active bookings.
   const staffCheck = await verifyStaffAvailability(staffCodes, scheduledStart);
   if (!staffCheck.success) return { success: false, error: staffCheck.error };
 
-  // Guard 3: Asset Inventory & Concurrency Check
   const assetCheck = await verifyAssetAvailability(assetIds, scheduledStart);
   if (!assetCheck.success) return { success: false, error: assetCheck.error };
 
@@ -242,12 +257,11 @@ export async function triggerEmergency(formData: FormData) {
   const rawAssetIds = getAll(formData, 'assetId');
   const assetIds = rawAssetIds.map(Number).filter((n) => !isNaN(n) && n > 0);
 
-  // Guard 2: Staff Concurrency Check
-  const staffCheck = await verifyStaffAvailability(staffCodes, scheduledStart);
+  // EMERGENCY OVERRIDE: We pass conflictBookingId so the guards know to ignore the booking we are stealing from!
+  const staffCheck = await verifyStaffAvailability(staffCodes, scheduledStart, conflictBookingId);
   if (!staffCheck.success) return { success: false, error: staffCheck.error };
 
-  // Guard 3: Asset Inventory & Concurrency Check
-  const assetCheck = await verifyAssetAvailability(assetIds, scheduledStart);
+  const assetCheck = await verifyAssetAvailability(assetIds, scheduledStart, conflictBookingId);
   if (!assetCheck.success) return { success: false, error: assetCheck.error };
 
   const { error: rescheduleError } = await supabase
